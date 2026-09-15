@@ -24,7 +24,7 @@ enum OrderStatus {
 model User {
   id                 String   @id @default(uuid())
   email              String   @unique
-  password           String?  // Nullable car utilisation potentielle de Magic Link / OTP
+  password           String?
   role               Role     @default(CLIENT)
   device_fingerprint String?
   is_approved        Boolean  @default(false)
@@ -44,10 +44,11 @@ model Product {
   ref          String      @unique
   title_fr     String
   title_ar     String
+  price        Decimal     @default(0)
   image_url    String?
   youtube_url  String?
   is_available Boolean     @default(true)
-  
+
   category     Category    @relation(fields: [category_id], references: [id])
   order_items  OrderItem[]
 }
@@ -58,7 +59,7 @@ model Order {
   status       OrderStatus @default(PENDING)
   total_amount Decimal
   created_at   DateTime    @default(now())
-  
+
   client       User        @relation(fields: [client_id], references: [id])
   items        OrderItem[]
 }
@@ -68,8 +69,8 @@ model OrderItem {
   order_id      String
   product_id    String
   requested_qty Int
-  approved_qty  Int?    // Null au départ, rempli par le commercial
-  
+  approved_qty  Int?
+
   order         Order   @relation(fields: [order_id], references: [id], onDelete: Cascade)
   product       Product @relation(fields: [product_id], references: [id])
 }

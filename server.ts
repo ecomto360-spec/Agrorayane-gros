@@ -15,7 +15,7 @@ app.post('/api/auth/register', async (req, res) => {
   try {
     const { email, device_fingerprint } = req.body;
     let user = await prisma.user.findUnique({ where: { email } });
-    
+
     if (!user) {
       user = await prisma.user.create({
         data: {
@@ -26,7 +26,7 @@ app.post('/api/auth/register', async (req, res) => {
         },
       });
     }
-    
+
     res.json({ success: true, message: 'Account pending approval', user });
   } catch (error) {
     console.error('Error in register:', error);
@@ -61,7 +61,7 @@ app.get('/api/products', async (req, res) => {
     res.status(500).json({ error: String(error) });
   }
 });
-  
+
 app.get('/api/categories', async (req, res) => {
   try {
     const categories = await prisma.category.findMany();
@@ -77,14 +77,12 @@ app.post('/api/orders', async (req, res) => {
   try {
     const { items, client_id, total_amount } = req.body;
 
-    // S'assurer qu'un client par défaut existe si non fourni
     let targetClientId = client_id;
     if (!targetClientId) {
       const defaultUser = await prisma.user.findFirst({ where: { role: 'CLIENT' } });
       if (defaultUser) {
         targetClientId = defaultUser.id;
       } else {
-        // Créer un client par défaut si aucun n'existe
         const newClient = await prisma.user.create({
           data: { email: `client-${Date.now()}-temp@agrorayane.com`, role: 'CLIENT', is_approved: true }
         });
@@ -241,13 +239,14 @@ app.get('/api/commercial/products', async (req, res) => {
 
 app.post('/api/commercial/products', async (req, res) => {
   try {
-    const { category_id, ref, title_fr, title_ar, image_url, youtube_url, is_available } = req.body;
+    const { category_id, ref, title_fr, title_ar, price, image_url, youtube_url, is_available } = req.body;
     const newProduct = await prisma.product.create({
       data: {
         category_id,
         ref,
         title_fr,
         title_ar,
+        price: price !== undefined ? Number(price) : 0,
         image_url,
         youtube_url,
         is_available: is_available !== undefined ? is_available : true,
@@ -263,9 +262,11 @@ app.post('/api/commercial/products', async (req, res) => {
 app.patch('/api/commercial/products/:id', async (req, res) => {
   try {
     const productId = req.params.id;
+    const data = { ...req.body };
+    if (data.price !== undefined) data.price = Number(data.price);
     const updated = await prisma.product.update({
       where: { id: productId },
-      data: req.body,
+      data,
     });
     res.json({ success: true, product: updated });
   } catch (error) {
@@ -343,10 +344,8 @@ async function setupLocalServer() {
   });
 }
 
-// Si on lance le fichier directement en local (node server.ts ou via ts-node)
 if (process.env.NODE_ENV !== 'production') {
   setupLocalServer();
 }
 
-// Export indispensable pour Vercel (Serverless)
 export default app;
