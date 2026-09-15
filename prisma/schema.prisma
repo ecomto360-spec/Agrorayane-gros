@@ -1,0 +1,73 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  CLIENT
+  COMMERCIAL
+  GERANT
+}
+
+enum OrderStatus {
+  PENDING
+  APPROVED
+  SHIPPED
+}
+
+model User {
+  id                 String   @id @default(uuid())
+  email              String   @unique
+  password           String?  // Nullable car utilisation potentielle de Magic Link / OTP
+  role               Role     @default(CLIENT)
+  device_fingerprint String?
+  is_approved        Boolean  @default(false)
+  orders             Order[]
+}
+
+model Category {
+  id       String    @id @default(uuid())
+  name_fr  String
+  name_ar  String
+  products Product[]
+}
+
+model Product {
+  id           String      @id @default(uuid())
+  category_id  String
+  ref          String      @unique
+  title_fr     String
+  title_ar     String
+  image_url    String?
+  youtube_url  String?
+  is_available Boolean     @default(true)
+  
+  category     Category    @relation(fields: [category_id], references: [id])
+  order_items  OrderItem[]
+}
+
+model Order {
+  id           String      @id @default(uuid())
+  client_id    String
+  status       OrderStatus @default(PENDING)
+  total_amount Decimal
+  created_at   DateTime    @default(now())
+  
+  client       User        @relation(fields: [client_id], references: [id])
+  items        OrderItem[]
+}
+
+model OrderItem {
+  id            String  @id @default(uuid())
+  order_id      String
+  product_id    String
+  requested_qty Int
+  approved_qty  Int?    // Null au départ, rempli par le commercial
+  
+  order         Order   @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  product       Product @relation(fields: [product_id], references: [id])
+}
