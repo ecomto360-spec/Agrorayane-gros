@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Order, Category, Product } from '../types';
-import { FileText, Check, AlertTriangle, ArrowRight, Package, Plus, Save, Image as ImageIcon, Video, X, Tag, Upload, Search, User } from 'lucide-react';
+import { FileText, Check, AlertTriangle, ArrowRight, Package, Plus, Save, Image as ImageIcon, Video, X, Tag, Upload, Search, User, Eye, ShoppingBag, Trash2, ArrowLeft, MoreHorizontal, Pencil, HelpCircle, Database, Download } from 'lucide-react';
 
 export default function BackOffice() {
-  const [activeTab, setActiveTab] = useState<'orders' | 'catalog' | 'categories' | 'agent'>('orders');
+  const [activeTab, setActiveTab] = useState<'orders' | 'catalog' | 'categories' | 'agent' | 'backup'>('orders');
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [corrections, setCorrections] = useState<Record<string, number>>({});
+  const [orderFilter, setOrderFilter] = useState<'all' | 'pending' | 'approved' | 'cancelled' | 'trash'>('all');
 
   // Catalog State
   const [products, setProducts] = useState<Product[]>([]);
@@ -70,12 +71,7 @@ export default function BackOffice() {
   }, [activeTab]);
 
   useEffect(() => {
-    if (activeTab === 'orders' && orders.length > 0 && !selectedOrder) {
-      const firstPending = orders.find(o => o.status === 'PENDING');
-      if (firstPending) {
-        selectOrder(firstPending);
-      }
-    }
+    // Removed auto-selection of orders to allow the list view to render by default
   }, [orders, activeTab]);
 
   const selectOrder = (order: Order) => {
@@ -136,12 +132,19 @@ export default function BackOffice() {
     e.stopPropagation();
     if (!window.confirm("Êtes-vous sûr de vouloir supprimer ce produit ?")) return;
     
-    await fetch(`/api/commercial/products/${id}`, { method: 'DELETE' });
+    // Optimistic UI update
+    setProducts(prev => prev.filter(p => p.id !== id));
+    
     if (editingProductId === id) {
       setIsAddingProduct(false);
       setEditingProductId(null);
     }
-    fetchCatalogData();
+
+    try {
+      await fetch(`/api/commercial/products/${id}`, { method: 'DELETE' });
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const saveProduct = async (e: React.FormEvent) => {
@@ -183,35 +186,48 @@ export default function BackOffice() {
     e.stopPropagation();
     if (!window.confirm("Êtes-vous sûr de vouloir supprimer cette catégorie ?")) return;
     
-    await fetch(`/api/commercial/categories/${id}`, { method: 'DELETE' });
+    // Optimistic UI update
+    setCategories(prev => prev.filter(c => c.id !== id));
+    
     if (editingCategoryId === id) {
       setIsAddingCategory(false);
       setEditingCategoryId(null);
     }
-    fetchCatalogData();
+    
+    try {
+      await fetch(`/api/commercial/categories/${id}`, { method: 'DELETE' });
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const saveCategory = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (editingCategoryId) {
-      await fetch(`/api/commercial/categories/${editingCategoryId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newCategory)
-      });
-      alert('Catégorie modifiée avec succès !');
-    } else {
-      await fetch('/api/commercial/categories', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newCategory)
-      });
-      alert('Catégorie ajoutée avec succès !');
+    try {
+      if (editingCategoryId) {
+        const res = await fetch(`/api/commercial/categories/${editingCategoryId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newCategory)
+        });
+        if (!res.ok) throw new Error("Erreur lors de la modification");
+        alert('Catégorie modifiée avec succès !');
+      } else {
+        const res = await fetch('/api/commercial/categories', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newCategory)
+        });
+        if (!res.ok) throw new Error("Erreur lors de l'ajout (Vérifiez la connexion au serveur)");
+        alert('Catégorie ajoutée avec succès !');
+      }
+      setIsAddingCategory(false);
+      setEditingCategoryId(null);
+      setNewCategory({ name_fr: '', name_ar: '' });
+      fetchCatalogData();
+    } catch (err: any) {
+      alert(err.message);
     }
-    setIsAddingCategory(false);
-    setEditingCategoryId(null);
-    setNewCategory({ name_fr: '', name_ar: '' });
-    fetchCatalogData();
   };
 
   const openAddAgentForm = () => {
@@ -242,10 +258,63 @@ export default function BackOffice() {
     fetchAgentInfo();
   };
 
+  const handleExport = () => {
+    try {
+      const backupData = {
+        products,
+        categories,
+        orders,
+        exportDate: new Date().toISOString()
+      };
+      
+      const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `backup_agrorayane_${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert("Erreur lors de l'exportation des données.");
+    }
+  };
+
+  const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const content = event.target?.result as string;
+        const data = JSON.parse(content);
+        
+        if (!window.confirm("Attention : L'importation peut écraser ou créer des doublons. Voulez-vous continuer ?")) {
+           if (e.target) e.target.value = '';
+           return;
+        }
+
+        alert(`Données lues : ${data.products?.length || 0} produits, ${data.categories?.length || 0} catégories, ${data.orders?.length || 0} commandes.\n\nNote: L'enregistrement réel en base via import massif nécessite une route API spécifique non disponible actuellement. Ceci est une simulation.`);
+        
+        // Simulation frontend pour voir les données
+        if (data.products) setProducts(data.products);
+        if (data.categories) setCategories(data.categories);
+        if (data.orders) setOrders(data.orders);
+        
+      } catch (err) {
+        alert("Erreur : Le fichier JSON est invalide ou corrompu.");
+      }
+      if (e.target) e.target.value = '';
+    };
+    reader.readAsText(file);
+  };
+
   return (
     <div className="flex h-screen bg-gray-100 font-sans text-gray-800">
       {/* Sidebar */}
-      <div className="w-1/3 border-r border-gray-200 bg-white flex flex-col">
+      <div className="w-[280px] shrink-0 border-r border-gray-200 bg-white flex flex-col">
         <div className="p-6 border-b border-gray-200 bg-slate-900 text-white">
           <div className="flex items-center gap-4">
             <img src="https://www.agrorayane.com/wp-content/uploads/2023/06/icone-agrorayane.png" alt="Agro Rayane" className="w-[108px] h-[108px] object-contain bg-white rounded-xl p-3 shadow-sm" referrerPolicy="no-referrer" />
@@ -276,48 +345,28 @@ export default function BackOffice() {
               Catégories
             </button>
           </div>
-          <div className="flex p-2">
+          <div className="flex p-2 gap-1 border-b border-gray-200">
             <button 
               onClick={() => setActiveTab('agent')} 
               className={`flex-1 py-2 text-sm font-bold rounded transition-colors flex items-center justify-center gap-2 ${activeTab === 'agent' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
             >
               <User size={16} /> Utilisateurs
             </button>
+            <button 
+              onClick={() => setActiveTab('backup')} 
+              className={`flex-1 py-2 text-sm font-bold rounded transition-colors flex items-center justify-center gap-2 ${activeTab === 'backup' ? 'bg-white shadow text-amber-600' : 'text-gray-500 hover:text-gray-700'}`}
+            >
+              <Database size={16} /> Sauvegarde
+            </button>
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {activeTab === 'orders' ? (
-            <>
-              <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Demandes en attente</h2>
-              {orders.filter(o => o.status === 'PENDING').map(order => (
-                <button 
-                  key={order.id}
-                  onClick={() => selectOrder(order)}
-                  className={`w-full text-left p-4 rounded-xl border transition-all ${selectedOrder?.id === order.id ? 'border-blue-500 bg-blue-50 shadow-sm' : 'border-gray-200 bg-white hover:border-blue-300'}`}
-                >
-                  <div className="flex justify-between items-start mb-2">
-                    <span className="font-bold text-gray-800">{order.client_name}</span>
-                    <span className="bg-amber-100 text-amber-700 text-xs px-2 py-1 rounded-md font-medium">PENDING</span>
-                  </div>
-                  <div className="text-sm text-gray-500 flex justify-between">
-                    <span>Ref: {order.id}</span>
-                    <span>{order.items.length} articles</span>
-                  </div>
-                </button>
-              ))}
-
-              <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 mt-8">Traitées (Approuvées)</h2>
-              {orders.filter(o => o.status === 'APPROVED').map(order => (
-                <div key={order.id} className="w-full text-left p-4 rounded-xl border border-gray-200 bg-gray-50 opacity-70">
-                   <div className="flex justify-between items-start mb-2">
-                    <span className="font-bold text-gray-800">{order.client_name}</span>
-                    <span className="bg-green-100 text-green-700 text-xs px-2 py-1 rounded-md font-medium">APPROVED</span>
-                  </div>
-                  <div className="text-sm text-gray-500">Ref: {order.id}</div>
-                </div>
-              ))}
-            </>
+             <div className="flex-1 flex flex-col items-center justify-center text-slate-400 p-8 text-center space-y-4">
+               <ShoppingBag className="w-16 h-16 opacity-20" />
+               <p className="text-sm font-medium">Gestion globale des commandes</p>
+            </div>
           ) : activeTab === 'catalog' ? (
             <>
               <div className="flex justify-between items-center mb-4">
@@ -406,94 +455,331 @@ export default function BackOffice() {
       </div>
 
       {/* Main Area */}
-      <div className="w-2/3 bg-gray-50 flex flex-col">
+      <div className="flex-1 bg-gray-50 flex flex-col min-w-0">
         {activeTab === 'orders' ? (
           selectedOrder ? (
             <>
-              <div className="p-6 bg-white border-b border-gray-200 flex justify-between items-center shadow-sm z-10">
-                <div>
-                  <h2 className="text-2xl font-bold text-gray-800">Validation de la commande</h2>
-                  <p className="text-gray-500">Client: {selectedOrder.client_name} | Ref: {selectedOrder.id}</p>
-                </div>
-                <div className="flex gap-3">
-                   <button className="flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium transition-colors">
-                      <FileText className="w-4 h-4" />
-                      Voir PDF Brouillon
+              <div className="flex-1 flex flex-col bg-[#f0f0f1] overflow-y-auto p-4 sm:p-8">
+                {/* Header */}
+                <div className="flex items-center gap-4 mb-4">
+                   <button onClick={() => setSelectedOrder(null)} className="text-[#a7aaad] hover:text-[#2271b1] transition-colors" title="Retour">
+                     <ArrowLeft className="w-5 h-5" />
                    </button>
-                   <button onClick={approveOrder} className="flex items-center gap-2 px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold transition-colors shadow-md">
-                      <Check className="w-4 h-4" />
-                      Valider & Générer BL
-                   </button>
+                   <h1 className="text-[22px] font-normal text-[#1d2327]">Modifier commande</h1>
+                   <button className="px-3 py-1 text-[13px] text-[#2271b1] border border-[#2271b1] rounded hover:bg-[#f6f7f7] bg-white transition-colors">Ajouter une commande</button>
                 </div>
-              </div>
-              
-              <div className="flex-1 overflow-y-auto p-8">
-                <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-                  {/* Table Header */}
-                  <div className="grid grid-cols-12 gap-4 p-4 bg-gray-100 border-b border-gray-200 font-semibold text-gray-600 text-sm">
-                    <div className="col-span-5">Produit</div>
-                    <div className="col-span-2 text-center text-amber-700 bg-amber-50 rounded py-1">Demande Client</div>
-                    <div className="col-span-2 text-center text-slate-500">Stock Réel</div>
-                    <div className="col-span-3 text-center text-blue-700 bg-blue-50 rounded py-1">Correction Commercial</div>
-                  </div>
-                  
-                  {/* Table Body */}
-                  <div className="divide-y divide-gray-100">
-                    {selectedOrder.items.map(item => {
-                      const req = item.requested_qty;
-                      const stock = item.product?.stock_quantity_mock || 0;
-                      const approved = corrections[item.id] ?? req;
-                      const isShortage = stock < req;
 
-                      return (
-                        <div key={item.id} className={`grid grid-cols-12 gap-4 p-4 items-center ${isShortage ? 'bg-red-50/30' : ''}`}>
-                          <div className="col-span-5 flex items-center gap-3">
-                            <img src={item.product?.image_url!} className="w-12 h-12 rounded object-cover border border-gray-200" alt="" />
-                            <div>
-                              <p className="font-bold text-gray-800 text-sm">{item.product?.title_fr}</p>
-                              <p className="text-xs text-gray-500">{item.product?.ref}</p>
+                {/* Main Card */}
+                <div className="bg-white border border-[#c3c4c7] rounded-sm shadow-sm">
+                   {/* Card Title */}
+                   <div className="p-5 border-b border-[#c3c4c7]">
+                      <h2 className="text-[18px] font-semibold text-[#1d2327] mb-1">Commande n° {selectedOrder.id.split('-')[1] || selectedOrder.id}</h2>
+                      <p className="text-[13px] text-[#646970]">Paiement par Paiement à la livraison. Payé le 14 septembre 2026 à 4:40 am. Adresse IP du client : 41.100.171.43</p>
+                   </div>
+
+                   {/* 3 Columns Section */}
+                   <div className="grid grid-cols-1 md:grid-cols-3 p-5 gap-8 border-b border-[#c3c4c7]">
+                      {/* Col 1: Général */}
+                      <div>
+                         <h3 className="font-semibold text-[#1d2327] text-[14px] mb-4">Général</h3>
+                         
+                         <div className="mb-4">
+                            <label className="block text-[13px] text-[#1d2327] font-semibold mb-1">Date de création</label>
+                            <div className="flex gap-2 items-center">
+                               <input type="date" className="border border-[#8c8f94] rounded-sm px-2 py-1 text-[13px] w-32 focus:border-[#2271b1] focus:ring-1 focus:ring-[#2271b1] outline-none" defaultValue="2026-09-14" />
+                               <input type="text" className="border border-[#8c8f94] rounded-sm px-2 py-1 text-[13px] w-12 text-center focus:border-[#2271b1] focus:ring-1 focus:ring-[#2271b1] outline-none" defaultValue="04" />
+                               <span>:</span>
+                               <input type="text" className="border border-[#8c8f94] rounded-sm px-2 py-1 text-[13px] w-12 text-center focus:border-[#2271b1] focus:ring-1 focus:ring-[#2271b1] outline-none" defaultValue="40" />
                             </div>
-                          </div>
-                          
-                          <div className="col-span-2 text-center font-bold text-lg text-gray-700">
-                            {req}
-                          </div>
-                          
-                          <div className="col-span-2 flex flex-col items-center justify-center">
-                            <span className={`text-sm font-bold ${stock === 0 ? 'text-red-500' : (stock < req ? 'text-orange-500' : 'text-green-600')}`}>
-                              {stock}
-                            </span>
-                            {isShortage && <AlertTriangle className="w-4 h-4 text-orange-500 mt-1" />}
-                          </div>
-                          
-                          <div className="col-span-3 flex items-center justify-center gap-3">
-                            <ArrowRight className="w-4 h-4 text-gray-300" />
-                            <div className="relative">
-                              <input 
-                                type="number"
-                                min="0"
-                                value={approved}
-                                onChange={(e) => handleUpdateQty(item.id, parseInt(e.target.value) || 0)}
-                                className={`w-24 text-center text-lg font-bold border-2 rounded-lg py-2 focus:outline-none focus:ring-2 ${
-                                  approved !== req ? 'border-blue-400 bg-blue-50 text-blue-700 focus:ring-blue-200' : 'border-gray-200 bg-gray-50 focus:border-blue-400'
-                                }`}
-                              />
-                              {approved !== req && (
-                                <span className="absolute -top-2 -right-2 bg-blue-100 text-blue-700 text-[10px] px-1.5 rounded font-bold border border-blue-200">Modifié</span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                         </div>
+
+                         <div className="mb-4">
+                            <label className="block text-[13px] text-[#1d2327] font-semibold mb-1">État</label>
+                            <select 
+                              className="w-full border border-[#8c8f94] rounded-sm px-2 py-1.5 text-[13px] focus:border-[#2271b1] focus:ring-1 focus:ring-[#2271b1] outline-none"
+                              value={selectedOrder.status === 'PENDING' ? 'en_cours' : (selectedOrder.status === 'APPROVED' ? 'terminee' : 'annulee')}
+                              onChange={(e) => {
+                                 const val = e.target.value;
+                                 let newStatus: 'PENDING' | 'APPROVED' | 'CANCELLED' = 'PENDING';
+                                 if (val === 'terminee') newStatus = 'APPROVED';
+                                 if (val === 'annulee') newStatus = 'CANCELLED';
+                                 
+                                 // Optimistic UI update
+                                 setOrders(orders.map(o => o.id === selectedOrder.id ? { ...o, status: newStatus } : o));
+                                 setSelectedOrder({...selectedOrder, status: newStatus});
+                                 
+                                 // Need a real endpoint to just update status in a real app, 
+                                 // but here we reuse approveOrder logic if we switch to terminee
+                                 if (newStatus === 'APPROVED') {
+                                    approveOrder();
+                                 }
+                              }}
+                            >
+                               <option value="attente_paiement">Attente paiement</option>
+                               <option value="en_cours">En cours</option>
+                               <option value="en_attente">En attente</option>
+                               <option value="terminee">Terminée</option>
+                               <option value="annulee">Annulée</option>
+                               <option value="remboursee">Remboursée</option>
+                            </select>
+                         </div>
+
+                         <div>
+                            <label className="block text-[13px] text-[#1d2327] font-semibold mb-1">Client</label>
+                            <select 
+                               defaultValue={selectedOrder.client_name}
+                               className="w-full border border-[#8c8f94] rounded-sm px-2 py-1.5 text-[13px] focus:border-[#2271b1] focus:ring-1 focus:ring-[#2271b1] outline-none"
+                            >
+                               <option value="Invité">Invité</option>
+                               <option value={selectedOrder.client_name}>{selectedOrder.client_name}</option>
+                            </select>
+                         </div>
+                      </div>
+
+                      {/* Col 2: Facturation */}
+                      <div>
+                         <div className="flex justify-between items-center mb-4">
+                            <h3 className="font-semibold text-[#1d2327] text-[14px]">Facturation</h3>
+                            <button className="text-[#a7aaad] hover:text-[#2271b1]"><Pencil className="w-3.5 h-3.5" /></button>
+                         </div>
+                         <div className="text-[13px] text-[#3c434a] leading-relaxed mb-4">
+                            {selectedOrder.client_name}<br/>
+                            Pharmacie de garde<br/>
+                            Sidi Bel Abbes<br/>
+                            22
+                         </div>
+                         
+                         <div className="mb-2">
+                            <span className="font-semibold text-[#1d2327] text-[13px]">Adresse e-mail:</span><br/>
+                            <span className="text-[13px] text-[#3c434a]">Aucune adresse e-mail définie.</span>
+                         </div>
+                         
+                         <div>
+                            <span className="font-semibold text-[#1d2327] text-[13px]">Téléphone:</span><br/>
+                            <a href="#" className="text-[13px] text-[#2271b1] hover:underline">0658405604</a>
+                         </div>
+                      </div>
+
+                      {/* Col 3: Expédition */}
+                      <div>
+                         <div className="flex justify-between items-center mb-4">
+                            <h3 className="font-semibold text-[#1d2327] text-[14px]">Expédition</h3>
+                            <button className="text-[#a7aaad] hover:text-[#2271b1]"><Pencil className="w-3.5 h-3.5" /></button>
+                         </div>
+                         <div className="text-[13px] text-[#3c434a]">
+                            Aucune adresse de livraison.
+                         </div>
+                      </div>
+                   </div>
+
+                   {/* Items Table Section */}
+                   <div className="p-0 border-b border-[#c3c4c7]">
+                      <table className="w-full text-left text-[13px]">
+                         <thead className="bg-[#f6f7f7] text-[#1d2327] font-semibold border-b border-[#c3c4c7]">
+                            <tr>
+                               <th className="py-2 px-4 w-16">Article</th>
+                               <th className="py-2 px-4"></th>
+                               <th className="py-2 px-4 text-right w-32">Prix</th>
+                               <th className="py-2 px-4 text-center w-20">Qté</th>
+                               <th className="py-2 px-4 text-right w-32">Total</th>
+                            </tr>
+                         </thead>
+                         <tbody className="divide-y divide-[#f0f0f1]">
+                            {selectedOrder.items.map(item => (
+                               <tr key={item.id} className="hover:bg-[#f6f7f7]">
+                                  <td className="py-3 px-4">
+                                     <div className="w-10 h-10 border border-[#e2e4e7] p-0.5 bg-white flex items-center justify-center">
+                                        <img src={item.product?.image_url} alt="" className="max-w-full max-h-full object-contain" />
+                                     </div>
+                                  </td>
+                                  <td className="py-3 px-4 text-[#2271b1] hover:underline cursor-pointer">
+                                     {item.product?.title_fr}
+                                  </td>
+                                  <td className="py-3 px-4 text-right text-[#3c434a]">
+                                     {item.product?.price.toLocaleString('fr-FR')} د.ج
+                                  </td>
+                                  <td className="py-3 px-4 text-center text-[#3c434a]">
+                                     × {item.requested_qty}
+                                  </td>
+                                  <td className="py-3 px-4 text-right text-[#3c434a]">
+                                     {(item.product?.price! * item.requested_qty).toLocaleString('fr-FR')} د.ج
+                                  </td>
+                               </tr>
+                            ))}
+                            
+                            {/* Shipping Row Mock */}
+                            <tr className="hover:bg-[#f6f7f7]">
+                               <td className="py-3 px-4 text-center text-[#a7aaad] text-lg">
+                                  🚚
+                               </td>
+                               <td className="py-3 px-4 text-[#3c434a]">
+                                  Yalidine Livraison a la maison
+                               </td>
+                               <td className="py-3 px-4 text-right text-[#3c434a]"></td>
+                               <td className="py-3 px-4 text-center text-[#3c434a]"></td>
+                               <td className="py-3 px-4 text-right text-[#3c434a]">
+                                  850,00 د.ج
+                               </td>
+                            </tr>
+                         </tbody>
+                      </table>
+                   </div>
+
+                   {/* Totals Section */}
+                   <div className="p-5 flex justify-end">
+                      <div className="w-full max-w-[300px]">
+                         <div className="flex justify-between items-center mb-2 text-[13px]">
+                            <span className="text-[#646970] text-right w-full pr-4">Sous-total des articles :</span>
+                            <span className="text-[#1d2327] font-semibold whitespace-nowrap">{selectedOrder.total_amount?.toLocaleString('fr-FR') || 0} د.ج</span>
+                         </div>
+                         <div className="flex justify-between items-center mb-2 text-[13px]">
+                            <span className="text-[#646970] text-right w-full pr-4">Expédition :</span>
+                            <span className="text-[#1d2327] font-semibold whitespace-nowrap">850,00 د.ج</span>
+                         </div>
+                         <div className="flex justify-between items-center mb-4 text-[13px]">
+                            <span className="text-[#646970] text-right w-full pr-4">Total de la commande :</span>
+                            <span className="text-[#1d2327] font-bold whitespace-nowrap">{((selectedOrder.total_amount || 0) + 850).toLocaleString('fr-FR')} د.ج</span>
+                         </div>
+                         
+                         <div className="border-t border-[#c3c4c7] pt-4 flex justify-between items-center text-[13px]">
+                            <span className="text-[#646970] text-right w-full pr-4 font-semibold">Payé :</span>
+                            <span className="text-[#1d2327] font-bold whitespace-nowrap">{((selectedOrder.total_amount || 0) + 850).toLocaleString('fr-FR')} د.ج</span>
+                         </div>
+                         <div className="text-right text-[11px] text-[#646970] mt-1">
+                            septembre 14, 2026
+                         </div>
+                      </div>
+                   </div>
+
+                   {/* Footer */}
+                   <div className="p-4 bg-[#f6f7f7] border-t border-[#c3c4c7] flex justify-between items-center rounded-b-sm">
+                      <button className="px-3 py-1.5 text-[13px] text-[#2271b1] border border-[#2271b1] bg-white rounded-sm hover:bg-[#f0f0f1] transition-colors">
+                         Remboursement
+                      </button>
+                      <div className="text-[13px] text-[#646970] flex items-center gap-1">
+                         <HelpCircle className="w-4 h-4 text-gray-400" />
+                         Cette commande n'est plus modifiable.
+                      </div>
+                   </div>
+
                 </div>
               </div>
             </>
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center text-gray-400 space-y-4">
-               <FileText className="w-16 h-16 opacity-20" />
-               <p className="text-lg font-medium">Sélectionnez une commande à valider</p>
+            <div className="flex-1 flex flex-col p-8 bg-gray-50 overflow-y-auto">
+              <div className="flex items-center gap-4 mb-6">
+                <h1 className="text-2xl font-semibold text-gray-800">Commandes</h1>
+                <button className="px-3 py-1.5 text-sm font-medium text-blue-600 border border-blue-600 rounded hover:bg-blue-50 transition-colors">Ajouter une commande</button>
+              </div>
+
+              {/* Status Filters */}
+              <div className="flex items-center gap-3 text-sm mb-4">
+                <button onClick={() => setOrderFilter('all')} className={`${orderFilter === 'all' ? 'font-bold text-gray-900' : 'text-blue-600 hover:underline'}`}>Tout <span className="text-gray-500 font-normal">({orders.length})</span></button>
+                <span className="text-gray-300">|</span>
+                <button onClick={() => setOrderFilter('pending')} className={`${orderFilter === 'pending' ? 'font-bold text-gray-900' : 'text-blue-600 hover:underline'}`}>En cours <span className="text-gray-500 font-normal">({orders.filter(o => o.status === 'PENDING').length})</span></button>
+                <span className="text-gray-300">|</span>
+                <button onClick={() => setOrderFilter('approved')} className={`${orderFilter === 'approved' ? 'font-bold text-gray-900' : 'text-blue-600 hover:underline'}`}>Terminée <span className="text-gray-500 font-normal">({orders.filter(o => o.status === 'APPROVED').length})</span></button>
+                <span className="text-gray-300">|</span>
+                <button onClick={() => setOrderFilter('cancelled')} className={`${orderFilter === 'cancelled' ? 'font-bold text-gray-900' : 'text-blue-600 hover:underline'}`}>Annulée <span className="text-gray-500 font-normal">({orders.filter(o => o.status === 'CANCELLED').length})</span></button>
+              </div>
+
+              {/* Toolbar */}
+              <div className="flex flex-wrap justify-between items-center bg-white p-2 border border-gray-300 border-b-0">
+                <div className="flex items-center gap-2">
+                  <select className="border border-gray-300 rounded px-2 py-1 text-sm bg-white focus:outline-none focus:border-blue-500">
+                    <option>Actions groupées</option>
+                    <option>Marquer en cours</option>
+                    <option>Marquer terminée</option>
+                    <option>Marquer annulée</option>
+                    <option>Mettre à la corbeille</option>
+                  </select>
+                  <button className="px-3 py-1 text-sm font-medium border border-gray-300 rounded bg-gray-50 hover:bg-gray-100 text-gray-700">Appliquer</button>
+                  
+                  <select className="border border-gray-300 rounded px-2 py-1 text-sm bg-white focus:outline-none focus:border-blue-500 ml-2">
+                    <option>Toutes les dates</option>
+                    <option>septembre 2026</option>
+                    <option>août 2026</option>
+                    <option>juillet 2026</option>
+                  </select>
+
+                  <select className="border border-gray-300 rounded px-2 py-1 text-sm bg-white focus:outline-none focus:border-blue-500">
+                    <option>Tous les canaux de vente</option>
+                  </select>
+
+                  <select className="border border-gray-300 rounded px-2 py-1 text-sm bg-white focus:outline-none focus:border-blue-500">
+                    <option>Filtrer par client enregistré</option>
+                  </select>
+                  <button className="px-3 py-1 text-sm font-medium border border-gray-300 rounded bg-gray-50 hover:bg-gray-100 text-gray-700">Filtrer</button>
+                </div>
+                
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-600">{orders.length} éléments</span>
+                  <div className="flex items-center gap-1">
+                    <button className="px-2 py-1 border border-gray-300 bg-gray-100 text-gray-400 rounded cursor-not-allowed text-xs">«</button>
+                    <button className="px-2 py-1 border border-gray-300 bg-gray-100 text-gray-400 rounded cursor-not-allowed text-xs">‹</button>
+                    <input type="text" value="1" readOnly className="w-8 text-center border border-gray-300 rounded py-1 text-sm bg-white" />
+                    <span className="text-sm text-gray-600">sur 1</span>
+                    <button className="px-2 py-1 border border-gray-300 bg-gray-100 text-gray-400 rounded cursor-not-allowed text-xs">›</button>
+                    <button className="px-2 py-1 border border-gray-300 bg-gray-100 text-gray-400 rounded cursor-not-allowed text-xs">»</button>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="flex justify-end bg-white px-2 pb-2 border-l border-r border-gray-300">
+                 <div className="flex items-center gap-2">
+                    <input type="text" className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:border-blue-500" />
+                    <button className="px-3 py-1 text-sm font-medium border border-gray-300 rounded bg-gray-50 hover:bg-gray-100 text-gray-700">Recherche commandes</button>
+                 </div>
+              </div>
+
+              {/* Table */}
+              <div className="bg-white border border-gray-300 overflow-x-auto">
+                <table className="w-full text-left text-sm text-gray-700">
+                  <thead className="bg-gray-50 border-b border-gray-300 font-semibold">
+                    <tr>
+                      <th className="p-3 w-10 text-center"><input type="checkbox" className="rounded border-gray-300" /></th>
+                      <th className="p-3 font-semibold text-blue-600 hover:underline cursor-pointer">Commande <ArrowRight className="inline w-3 h-3 rotate-90"/></th>
+                      <th className="p-3 font-semibold text-blue-600 hover:underline cursor-pointer">Date <ArrowRight className="inline w-3 h-3 rotate-90"/></th>
+                      <th className="p-3 font-semibold">État</th>
+                      <th className="p-3 font-semibold text-right text-blue-600 hover:underline cursor-pointer">Total <ArrowRight className="inline w-3 h-3 rotate-90"/></th>
+                      <th className="p-3 font-semibold">Origine</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {orders.filter(o => {
+                      if (orderFilter === 'all') return true;
+                      if (orderFilter === 'pending') return o.status === 'PENDING';
+                      if (orderFilter === 'approved') return o.status === 'APPROVED';
+                      if (orderFilter === 'cancelled') return o.status === 'CANCELLED';
+                      return true;
+                    }).map(order => (
+                      <tr key={order.id} className="hover:bg-gray-50 group">
+                        <td className="p-3 text-center"><input type="checkbox" className="rounded border-gray-300" /></td>
+                        <td className="p-3">
+                          <div className="flex items-center gap-3">
+                            <button onClick={() => selectOrder(order)} className="text-blue-600 font-bold hover:underline">
+                              #{order.id.split('-')[1]} {order.client_name.toUpperCase()}
+                            </button>
+                            <button onClick={() => selectOrder(order)} className="text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <Eye className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                        <td className="p-3 text-gray-500">il y a quelques heures</td>
+                        <td className="p-3">
+                          {order.status === 'PENDING' && <span className="bg-[#e5f5e5] text-[#1c662b] px-2.5 py-1 rounded font-medium text-xs">En cours</span>}
+                          {order.status === 'APPROVED' && <span className="bg-[#e0e5eb] text-[#3c434a] px-2.5 py-1 rounded font-medium text-xs">Terminée</span>}
+                          {order.status === 'CANCELLED' && <span className="bg-[#f0f0f1] text-[#a7aaad] px-2.5 py-1 rounded font-medium text-xs line-through">Annulée</span>}
+                        </td>
+                        <td className="p-3 text-right text-gray-500">
+                          {order.total_amount ? order.total_amount.toLocaleString('fr-FR') : '0,00'} د.ج
+                        </td>
+                        <td className="p-3 text-gray-500">Inconnu</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )
         ) : activeTab === 'catalog' ? (
@@ -760,6 +1046,64 @@ export default function BackOffice() {
                 </div>
               </>
             )}
+          </div>
+        ) : activeTab === 'backup' ? (
+          <div className="flex-1 flex flex-col p-8 bg-gray-50 overflow-y-auto">
+            <div className="flex items-center gap-4 mb-8">
+              <Database className="w-8 h-8 text-amber-600" />
+              <div>
+                <h1 className="text-2xl font-bold text-gray-800">Sauvegarde et Restauration</h1>
+                <p className="text-sm text-gray-500">Exportez et importez les données du catalogue, des commandes et des utilisateurs (Format JSON).</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl">
+              {/* Export Card */}
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 flex flex-col items-start gap-4">
+                 <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
+                   <Download className="w-6 h-6" />
+                 </div>
+                 <div>
+                   <h2 className="text-lg font-bold text-gray-800 mb-2">Exporter les données</h2>
+                   <p className="text-sm text-gray-500 mb-6">
+                     Téléchargez un fichier JSON contenant l'intégralité de la base de données (produits, catégories, commandes) pour l'archiver localement en toute sécurité.
+                   </p>
+                 </div>
+                 <button 
+                   onClick={handleExport}
+                   className="mt-auto flex items-center gap-2 px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold transition-colors shadow-sm"
+                 >
+                   <Download className="w-4 h-4" />
+                   Générer la sauvegarde
+                 </button>
+              </div>
+
+              {/* Import Card */}
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 flex flex-col items-start gap-4">
+                 <div className="p-3 bg-amber-50 text-amber-600 rounded-xl">
+                   <Upload className="w-6 h-6" />
+                 </div>
+                 <div>
+                   <h2 className="text-lg font-bold text-gray-800 mb-2">Importer des données</h2>
+                   <p className="text-sm text-gray-500 mb-6">
+                     Restaurez la base de données à partir d'un fichier de sauvegarde `.json`. Attention, l'importation écrasera les données locales actuelles de la session.
+                   </p>
+                 </div>
+                 
+                 <div className="mt-auto w-full">
+                    <label className="flex items-center justify-center gap-2 w-full px-6 py-2.5 bg-white border-2 border-dashed border-amber-300 text-amber-700 rounded-lg hover:bg-amber-50 cursor-pointer font-bold transition-colors">
+                      <Upload className="w-4 h-4" />
+                      Sélectionner le fichier JSON
+                      <input 
+                        type="file" 
+                        accept=".json"
+                        className="hidden" 
+                        onChange={handleImport}
+                      />
+                    </label>
+                 </div>
+              </div>
+            </div>
           </div>
         ) : null}
       </div>

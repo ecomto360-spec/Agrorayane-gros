@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useLanguage } from '../context/LanguageContext';
 import { Product, Category } from '../types';
-import { ShoppingCart, Search, CheckCircle2, XCircle, Menu, X, ArrowLeft } from 'lucide-react';
+import { ShoppingCart, Search, CheckCircle2, XCircle, Menu, X, ArrowLeft, Trash2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 export default function MobileSimulator() {
@@ -36,6 +36,23 @@ export default function MobileSimulator() {
     });
   };
 
+  const updateCartQty = (productId: string, delta: number) => {
+    setCart(prev => {
+      return prev.map(item => {
+        if (item.product.id === productId) {
+          const newQty = item.qty + delta;
+          if (newQty < 1) return null;
+          return { ...item, qty: newQty };
+        }
+        return item;
+      }).filter(Boolean) as {product: Product, qty: number}[];
+    });
+  };
+
+  const removeFromCart = (productId: string) => {
+    setCart(prev => prev.filter(item => item.product.id !== productId));
+  };
+
   const submitOrder = async () => {
     if (cart.length === 0) return;
     const items = cart.map(c => ({ product_id: c.product.id, requested_qty: c.qty }));
@@ -44,6 +61,20 @@ export default function MobileSimulator() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items, client_id: 'client-1' })
     });
+    
+    // Total calculation
+    const total = cart.reduce((acc, item) => acc + (item.product.price * item.qty), 0);
+    
+    // WhatsApp notification
+    let waMessage = `Nouvelle commande !%0A`;
+    waMessage += `Client: Client-1%0A`;
+    waMessage += `Total: ${total.toLocaleString('fr-FR')} DA%0A%0A`;
+    cart.forEach(item => {
+      waMessage += `- ${item.qty}x ${item.product.title_fr} (${(item.product.price * item.qty).toLocaleString('fr-FR')} DA)%0A`;
+    });
+    const waUrl = `https://wa.me/213554252579?text=${waMessage}`;
+    window.open(waUrl, '_blank');
+
     setCart([]);
     setShowCart(false);
     alert(t('order_success'));
@@ -130,32 +161,74 @@ export default function MobileSimulator() {
         )}
 
         {/* Main Content */}
-        {showCart ? (
-          <div className="flex-1 bg-gray-50 flex flex-col relative overflow-hidden">
-             <div className="p-4 bg-white shadow-sm flex items-center gap-3">
+         {showCart ? (
+          <div className="flex-1 bg-white flex flex-col relative overflow-hidden">
+             <div className="p-4 shadow-sm flex items-center gap-3">
                 <button onClick={() => setShowCart(false)} className="p-1 -ml-1 text-gray-600 hover:bg-gray-100 rounded-full transition-colors">
                   <ArrowLeft className={cn("w-6 h-6", isRtl ? "rotate-180" : "")} />
                 </button>
                 <h2 className="text-xl font-bold text-gray-800 flex-1">{t('cart')}</h2>
-                <button onClick={() => setShowCart(false)} className="text-gray-500 text-sm font-medium">{t('catalog')}</button>
              </div>
-             <div className="flex-1 overflow-y-auto p-4 space-y-4">
-               {cart.map((item, idx) => (
-                 <div key={idx} className="bg-white p-3 rounded-xl shadow-sm border border-gray-100 flex gap-3">
-                    <img src={item.product.image_url!} className="w-16 h-16 object-cover rounded-lg" alt="" />
-                    <div className="flex-1">
-                      <p className="text-sm font-semibold text-gray-800 line-clamp-1">{lang === 'fr' ? item.product.title_fr : item.product.title_ar}</p>
-                      <p className="text-xs text-gray-500">{item.product.ref}</p>
-                      <div className="mt-2 flex items-center justify-between">
-                        <span className="text-xs font-medium text-emerald-700 bg-emerald-50 px-2 py-1 rounded">{t('qty')}: {item.qty}</span>
-                      </div>
-                    </div>
-                 </div>
-               ))}
+             
+             {/* Cart Header */}
+             <div className="grid grid-cols-12 px-4 py-3 border-b border-gray-200 text-xs font-bold text-gray-700">
+               <div className="col-span-6">Produit</div>
+               <div className="col-span-3 text-center">Quantité</div>
+               <div className="col-span-3 text-right">Sous-total</div>
              </div>
+
+             <div className="flex-1 overflow-y-auto px-4">
+               <div className="divide-y divide-dashed divide-gray-200">
+                 {cart.map((item, idx) => {
+                   const subtotal = item.product.price * item.qty;
+                   return (
+                     <div key={idx} className="py-4 flex items-center justify-between gap-2">
+                        {/* Product Info */}
+                        <div className="flex items-center gap-2 w-1/2">
+                          <img src={item.product.image_url!} className="w-12 h-12 object-contain shrink-0" alt="" />
+                          <div>
+                            <p className="text-[11px] font-bold text-gray-600 leading-tight line-clamp-2">
+                              {lang === 'fr' ? item.product.title_fr : item.product.title_ar}
+                            </p>
+                            <p className="text-[10px] text-gray-500 mt-1">
+                              {item.product.price.toLocaleString('fr-FR')} {isRtl ? 'د.ج' : 'DA'}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Quantity Selector */}
+                        <div className="flex flex-col items-center justify-center shrink-0">
+                          <div className="flex items-center border border-[#73b614] rounded">
+                             <button onClick={() => updateCartQty(item.product.id, -1)} className="px-2 py-0.5 text-gray-500 hover:bg-gray-50 text-sm font-medium transition-colors">-</button>
+                             <span className="px-2 py-0.5 text-xs font-bold min-w-[20px] text-center border-l border-r border-[#73b614]/30">{item.qty}</span>
+                             <button onClick={() => updateCartQty(item.product.id, 1)} className="px-2 py-0.5 text-gray-500 hover:bg-gray-50 text-sm font-medium transition-colors">+</button>
+                          </div>
+                        </div>
+
+                        {/* Subtotal & Delete */}
+                        <div className="flex flex-col items-end shrink-0 gap-1 w-[22%]">
+                           <span className="text-[11px] font-bold text-gray-700 whitespace-nowrap">
+                             {subtotal.toLocaleString('fr-FR')} {isRtl ? 'د.ج' : 'DA'}
+                           </span>
+                           <button onClick={() => removeFromCart(item.product.id)} className="text-gray-400 hover:text-red-500 p-1 transition-colors">
+                             <Trash2 className="w-3.5 h-3.5" />
+                           </button>
+                        </div>
+                     </div>
+                   );
+                 })}
+               </div>
+             </div>
+
              <div className="p-4 bg-white border-t border-gray-100">
-               <button onClick={submitOrder} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl shadow-lg transition-colors">
-                 {t('request_order')}
+               <div className="flex justify-between items-center mb-4 px-2">
+                  <span className="font-bold text-gray-600 text-sm">Total</span>
+                  <span className="font-bold text-gray-800 text-lg">
+                    {cart.reduce((acc, item) => acc + (item.product.price * item.qty), 0).toLocaleString('fr-FR')} {isRtl ? 'د.ج' : 'DA'}
+                  </span>
+               </div>
+               <button onClick={submitOrder} className="w-full bg-[#73b614] hover:bg-[#629b11] text-white font-bold py-3 rounded text-sm shadow-md transition-colors">
+                 Valider la commande
                </button>
              </div>
           </div>
